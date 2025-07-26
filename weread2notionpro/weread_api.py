@@ -6,6 +6,7 @@ import requests
 from requests.utils import cookiejar_from_dict
 from urllib.parse import quote
 from dotenv import load_dotenv
+import functools
 
 load_dotenv()
 WEREAD_URL = "https://weread.qq.com/"
@@ -16,6 +17,33 @@ WEREAD_READ_INFO_URL = "https://weread.qq.com/web/book/readinfo"
 WEREAD_REVIEW_LIST_URL = "https://weread.qq.com/web/review/list"
 WEREAD_BOOK_INFO = "https://weread.qq.com/web/book/info"
 WEREAD_READDATA_DETAIL = "https://weread.qq.com/readdata/detail?synckey=0"
+
+def handle_api_response(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            response = func(*args, **kwargs)
+            
+            # 打印响应状态码和内容（用于调试）
+            print(f"请求 {func.__name__} 状态码: {response.status_code}")
+            print(f"请求 {func.__name__} 内容: {response.text}")
+            
+            if response.ok:
+                return response.json()
+            else:
+                try:
+                    errcode = response.json().get("errcode", 0)
+                except requests.exceptions.JSONDecodeError:
+                    errcode = 0
+                    print(f"警告: 响应不是有效的JSON格式: {response.text}")
+                
+                self = args[0]  # 获取方法的self参数
+                self.handle_errcode(errcode)
+                raise Exception(f"API请求失败，状态码: {response.status_code}, 内容: {response.text}")
+        except Exception as e:
+            print(f"调用 {func.__name__} 时发生异常: {e}")
+            raise
+    return wrapper
 
 class WeReadApi:
     def __init__(self):
@@ -53,60 +81,37 @@ class WeReadApi:
         
         return cookiejar
 
+    @handle_api_response
     def get_bookshelf(self):
         self.session.get(WEREAD_URL)
-        r = self.session.get(
+        return self.session.get(
             "https://weread.qq.com/shelf/sync?synckey=0&teenmode=0&album=1&onlyBookid=0"
         )
-        if r.ok:
-            return r.json()
-        else:
-            errcode = r.json().get("errcode",0)
-            self.handle_errcode(errcode)
-            raise Exception(f"Could not get bookshelf {r.text}")
         
     def handle_errcode(self,errcode):
         if( errcode== -2012 or errcode==-2010):
             print(f"::error::微信读书Cookie过期了，请参考文档重新设置。https://mp.weixin.qq.com/s/B_mqLUZv7M1rmXRsMlBf7A")
 
+    @handle_api_response
     def get_notebooklist(self):
         """获取笔记本列表"""
         self.session.get(WEREAD_URL)
-        r = self.session.get(WEREAD_NOTEBOOKS_URL)
-        if r.ok:
-            data = r.json()
-            books = data.get("books")
-            books.sort(key=lambda x: x["sort"])
-            return books
-        else:
-            errcode = r.json().get("errcode",0)
-            self.handle_errcode(errcode)
-            raise Exception(f"Could not get notebook list {r.text}")
+        return self.session.get(WEREAD_NOTEBOOKS_URL)
 
+    @handle_api_response
     def get_bookinfo(self, bookId):
         """获取书的详情"""
         self.session.get(WEREAD_URL)
         params = dict(bookId=bookId)
-        r = self.session.get(WEREAD_BOOK_INFO, params=params)
-        if r.ok:
-            return r.json()
-        else:
-            errcode = r.json().get("errcode",0)
-            self.handle_errcode(errcode)
-            print(f"Could not get book info {r.text}")
+        return self.session.get(WEREAD_BOOK_INFO, params=params)
 
+    @handle_api_response
     def get_bookmark_list(self, bookId):
         self.session.get(WEREAD_URL)
         params = dict(bookId=bookId)
-        r = self.session.get(WEREAD_BOOKMARKLIST_URL, params=params)
-        if r.ok:
-            bookmarks = r.json().get("updated")
-            return bookmarks
-        else:
-            errcode = r.json().get("errcode",0)
-            self.handle_errcode(errcode)
-            raise Exception(f"Could not get {bookId} bookmark list")
+        return self.session.get(WEREAD_BOOKMARKLIST_URL, params=params)
 
+    @handle_api_response
     def get_read_info(self, bookId):
         self.session.get(WEREAD_URL)
         params = dict(
@@ -126,65 +131,24 @@ class WeReadApi:
             "osver":"12",
             "User-Agent": "WeRead/8.2.5 WRBrand/xiaomi Dalvik/2.1.0 (Linux; U; Android 12; Redmi Note 7 Pro Build/SQ3A.220705.004)",
         }
-        r = self.session.get(WEREAD_READ_INFO_URL,headers=headers, params=params)
-        if r.ok:
-            return r.json()
-        else:
-            errcode = r.json().get("errcode",0)
-            self.handle_errcode(errcode)
-            raise Exception(f"get {bookId} read info failed {r.text}")
+        return self.session.get(WEREAD_READ_INFO_URL,headers=headers, params=params)
 
+    @handle_api_response
     def get_review_list(self, bookId):
         self.session.get(WEREAD_URL)
         params = dict(bookId=bookId, listType=11, mine=1, syncKey=0)
-        r = self.session.get(WEREAD_REVIEW_LIST_URL, params=params)
-        if r.ok:
-            reviews = r.json().get("reviews")
-            reviews = list(map(lambda x: x.get("review"), reviews))
-            reviews = [
-                {"chapterUid": 1000000, **x} if x.get("type") == 4 else x
-                for x in reviews
-            ]
-            return reviews
-        else:
-            errcode = r.json().get("errcode",0)
-            self.handle_errcode(errcode)
-            raise Exception(f"get {bookId} review list failed {r.text}")
+        return self.session.get(WEREAD_REVIEW_LIST_URL, params=params)
 
+    @handle_api_response
     def get_api_data(self):
         self.session.get(WEREAD_URL)
-        r = self.session.get(WEREAD_READDATA_DETAIL)
-        if r.ok:
-            return r.json()
-        else:
-            errcode = r.json().get("errcode",0)
-            self.handle_errcode(errcode)
-            raise Exception(f"get history data failed {r.text}")
+        return self.session.get(WEREAD_READDATA_DETAIL)
 
+    @handle_api_response
     def get_chapter_info(self, bookId):
         self.session.get(WEREAD_URL)
         body = {"bookIds": [bookId], "synckeys": [0], "teenmode": 0}
-        r = self.session.post(WEREAD_CHAPTER_INFO, json=body)
-        if (
-            r.ok
-            and "data" in r.json()
-            and len(r.json()["data"]) == 1
-            and "updated" in r.json()["data"][0]
-        ):
-            update = r.json()["data"][0]["updated"]
-            update.append(
-                {
-                    "chapterUid": 1000000,
-                    "chapterIdx": 1000000,
-                    "updateTime": 1683825006,
-                    "readAhead": 0,
-                    "title": "点评",
-                    "level": 1,
-                }
-            )
-            return {item["chapterUid"]: item for item in update}
-        else:
-            raise Exception(f"get {bookId} chapter info failed {r.text}")
+        return self.session.post(WEREAD_CHAPTER_INFO, json=body)
 
     def transform_id(self, book_id):
         id_length = len(book_id)
