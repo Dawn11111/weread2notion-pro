@@ -4,7 +4,6 @@ import os
 import re
 import requests
 from requests.utils import cookiejar_from_dict
-from retrying import retry
 from urllib.parse import quote
 from dotenv import load_dotenv
 
@@ -26,28 +25,6 @@ class WeReadApi:
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
         })
-
-    def refresh_session(self, exception=None):
-        """刷新会话"""
-        self.session.get(WEREAD_URL)
-
-    def try_get_cloud_cookie(self, url, id, password):
-        if url.endswith("/"):
-            url = url[:-1]
-        req_url = f"{url}/get/{id}"
-        data = {"password": password}
-        result = None
-        response = requests.post(req_url, data=data)
-        if response.status_code == 200:
-            data = response.json()
-            cookie_data = data.get("cookie_data")
-            if cookie_data and "weread.qq.com" in cookie_data:
-                cookies = cookie_data["weread.qq.com"]
-                cookie_str = "; ".join(
-                    [f"{cookie['name']}={cookie['value']}" for cookie in cookies]
-                )
-                result = cookie_str
-        return result
 
     def get_cookie(self):
         url = os.getenv("CC_URL")
@@ -76,11 +53,10 @@ class WeReadApi:
         
         return cookiejar
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_session)
     def get_bookshelf(self):
         self.session.get(WEREAD_URL)
         r = self.session.get(
-            "https://i.weread.qq.com/shelf/sync?synckey=0&teenmode=0&album=1&onlyBookid=0"
+            "https://weread.qq.com/web/shelf/sync?synckey=0&teenmode=0&album=1&onlyBookid=0"
         )
         if r.ok:
             return r.json()
@@ -93,7 +69,6 @@ class WeReadApi:
         if( errcode== -2012 or errcode==-2010):
             print(f"::error::微信读书Cookie过期了，请参考文档重新设置。https://mp.weixin.qq.com/s/B_mqLUZv7M1rmXRsMlBf7A")
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_session)
     def get_notebooklist(self):
         """获取笔记本列表"""
         self.session.get(WEREAD_URL)
@@ -108,7 +83,6 @@ class WeReadApi:
             self.handle_errcode(errcode)
             raise Exception(f"Could not get notebook list {r.text}")
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_session)
     def get_bookinfo(self, bookId):
         """获取书的详情"""
         self.session.get(WEREAD_URL)
@@ -121,7 +95,6 @@ class WeReadApi:
             self.handle_errcode(errcode)
             print(f"Could not get book info {r.text}")
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_session)
     def get_bookmark_list(self, bookId):
         self.session.get(WEREAD_URL)
         params = dict(bookId=bookId)
@@ -134,7 +107,6 @@ class WeReadApi:
             self.handle_errcode(errcode)
             raise Exception(f"Could not get {bookId} bookmark list")
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_session)
     def get_read_info(self, bookId):
         self.session.get(WEREAD_URL)
         params = dict(
@@ -162,7 +134,6 @@ class WeReadApi:
             self.handle_errcode(errcode)
             raise Exception(f"get {bookId} read info failed {r.text}")
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_session)
     def get_review_list(self, bookId):
         self.session.get(WEREAD_URL)
         params = dict(bookId=bookId, listType=11, mine=1, syncKey=0)
@@ -180,7 +151,6 @@ class WeReadApi:
             self.handle_errcode(errcode)
             raise Exception(f"get {bookId} review list failed {r.text}")
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_session)
     def get_api_data(self):
         self.session.get(WEREAD_URL)
         r = self.session.get(WEREAD_READDATA_DETAIL)
@@ -191,7 +161,6 @@ class WeReadApi:
             self.handle_errcode(errcode)
             raise Exception(f"get history data failed {r.text}")
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_session)
     def get_chapter_info(self, bookId):
         self.session.get(WEREAD_URL)
         body = {"bookIds": [bookId], "synckeys": [0], "teenmode": 0}
