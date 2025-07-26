@@ -85,7 +85,7 @@ class WeReadApi:
     def get_bookshelf(self):
         self.session.get(WEREAD_URL)
         return self.session.get(
-            "https://weread.qq.com/shelf/sync?synckey=0&teenmode=0&album=1&onlyBookid=0"
+            "https://weread.qq.com/web/shelf/sync?synckey=0&teenmode=0&album=1&onlyBookid=0"
         )
         
     def handle_errcode(self,errcode):
