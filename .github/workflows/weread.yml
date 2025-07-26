@@ -54,7 +54,7 @@ jobs:
           pip install -r requirements.txt
       - name: weread book sync
         run: |
-          python weread2notionpro/weread.py
+          python weread2notionpro/book.py
       - name: weread sync
         run: |
-          python weread2notionpro/read_time.py
+          python weread2notionpro/weread.py
