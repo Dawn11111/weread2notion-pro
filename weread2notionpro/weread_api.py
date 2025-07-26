@@ -154,11 +154,11 @@ class WeReadApi:
         r = self.session.get(WEREAD_BOOKMARKLIST_URL, params=params)
         if r.ok:
             bookmarks = r.json().get("updated", [])
-            # 添加排序逻辑
+            # 添加排序逻辑 - 修复括号问题
             return sorted(
                 bookmarks,
-                key=lambda x: (x.get("chapterUid", 1), int(x.get("range", "0-0").split("-")[0])
-            )
+                key=lambda x: (x.get("chapterUid", 1), int(x.get("range", "0-0").split("-")[0]))
+            )  # 这里添加了缺失的括号
         else:
             errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
