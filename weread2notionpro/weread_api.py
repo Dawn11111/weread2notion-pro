@@ -2,23 +2,25 @@ import hashlib
 import json
 import os
 import re
+import time  # 新增导入
 
 import requests
 from requests.utils import cookiejar_from_dict
-from retrying import retry
+from retrying import retry  # 确保已安装retrying库
 from urllib.parse import quote
 from dotenv import load_dotenv
 
 load_dotenv()
+# 更新API端点
 WEREAD_URL = "https://weread.qq.com/"
 WEREAD_NOTEBOOKS_URL = "https://weread.qq.com/api/user/notebook"
 WEREAD_BOOKMARKLIST_URL = "https://weread.qq.com/web/book/bookmarklist"
 WEREAD_CHAPTER_INFO = "https://weread.qq.com/web/book/chapterInfos"
 WEREAD_READ_INFO_URL = "https://weread.qq.com/web/book/readinfo"
-WEREAD_PROGRESS_URL = "https://weread.qq.com/web/book/getProgress"
 WEREAD_REVIEW_LIST_URL = "https://weread.qq.com/web/review/list"
 WEREAD_BOOK_INFO = "https://weread.qq.com/web/book/info"
-WEREAD_HISTORY_URL = "https://weread.qq.com/readdata/summary?synckey=0"
+WEREAD_READDATA_DETAIL = "https://i.weread.qq.com/readdata/detail"  # 保留不变
+WEREAD_HISTORY_URL = "https://i.weread.qq.com/readdata/summary?synckey=0"  # 保留不变
 
 
 class WeReadApi:
@@ -26,28 +28,38 @@ class WeReadApi:
         self.cookie = self.get_cookie()
         self.session = requests.Session()
         self.session.cookies = self.parse_cookie_string()
-        # 设置统一的请求头
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/73.0.3683.103 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*'
-        })
 
+    # 新增刷新token函数
+    def refresh_token(self, exception=None):
+        """刷新session保持有效"""
+        try:
+            self.session.get(WEREAD_URL)
+        except Exception as e:
+            logging.error(f"刷新token失败: {e}")
+
+    # 添加重试装饰器
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def try_get_cloud_cookie(self, url, id, password):
         if url.endswith("/"):
             url = url[:-1]
         req_url = f"{url}/get/{id}"
         data = {"password": password}
         result = None
-        response = requests.post(req_url, data=data)
-        if response.status_code == 200:
-            data = response.json()
-            cookie_data = data.get("cookie_data")
-            if cookie_data and "weread.qq.com" in cookie_data:
-                cookies = cookie_data["weread.qq.com"]
-                cookie_str = "; ".join(
-                    [f"{cookie['name']}={cookie['value']}" for cookie in cookies]
-                )
-                result = cookie_str
+        try:
+            # 请求前刷新session
+            self.session.get(WEREAD_URL)
+            response = requests.post(req_url, data=data)
+            if response.status_code == 200:
+                data = response.json()
+                cookie_data = data.get("cookie_data")
+                if cookie_data and "weread.qq.com" in cookie_data:
+                    cookies = cookie_data["weread.qq.com"]
+                    cookie_str = "; ".join(
+                        [f"{cookie['name']}={cookie['value']}" for cookie in cookies]
+                    )
+                    result = cookie_str
+        except Exception as e:
+            logging.error(f"从CookieCloud获取cookie失败: {e}")
         return result
 
     def get_cookie(self):
@@ -65,165 +77,156 @@ class WeReadApi:
 
     def parse_cookie_string(self):
         cookies_dict = {}
-        
-        # 使用正则表达式解析 cookie 字符串
         pattern = re.compile(r'([^=]+)=([^;]+);?\s*')
         matches = pattern.findall(self.cookie)
         
         for key, value in matches:
-            cookies_dict[key] = value.encode('unicode_escape').decode('ascii')
-        # 直接使用 cookies_dict 创建 cookiejar
+            cookies_dict[key] = value
         cookiejar = cookiejar_from_dict(cookies_dict)
-        
         return cookiejar
 
+    # 添加重试和刷新
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_bookshelf(self):
+        """获取书架信息"""
+        # 请求前刷新session
         self.session.get(WEREAD_URL)
         r = self.session.get(
-            "https://weread.qq.com/shelf/sync?synckey=0&teenmode=0&album=1&onlyBookid=0"
+            "https://i.weread.qq.com/shelf/sync?synckey=0&teenmode=0&album=1&onlyBookid=0"
         )
         if r.ok:
             return r.json()
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"Could not get bookshelf {r.text}")
         
-    def handle_errcode(self,errcode):
-        if( errcode== -2012 or errcode==-2010):
-            print(f"::error::微信读书Cookie过期了，请参考文档重新设置。https://mp.weixin.qq.com/s/B_mqLUZv7M1rmXRsMlBf7A")
+    def handle_errcode(self, errcode):
+        if errcode in (-2012, -2010):
+            error_msg = "微信读书Cookie过期了，请参考文档重新设置。https://mp.weixin.qq.com/s/B_mqLUZv7M1rmXRsMlBf7A"
+            logging.error(error_msg)
+            raise Exception(error_msg)
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000)
+    # 添加重试和刷新
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_notebooklist(self):
         """获取笔记本列表"""
+        # 请求前刷新session
         self.session.get(WEREAD_URL)
         r = self.session.get(WEREAD_NOTEBOOKS_URL)
         if r.ok:
             data = r.json()
             books = data.get("books", [])
-            books.sort(key=lambda x: x.get("sort", 0))
+            books.sort(key=lambda x: x["sort"])
             return books
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"Could not get notebook list {r.text}")
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000)
+    # 添加重试和刷新
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_bookinfo(self, bookId):
         """获取书的详情"""
+        # 请求前刷新session
         self.session.get(WEREAD_URL)
         params = dict(bookId=bookId)
         r = self.session.get(WEREAD_BOOK_INFO, params=params)
         if r.ok:
-            return r.json()
+            data = r.json()
+            # 使用更安全的get方法
+            isbn = data.get("isbn", "")
+            newRating = data.get("newRating", 0) / 1000
+            return (isbn, newRating)
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
-            print(f"Could not get book info {r.text}")
+            logging.error(f"Could not get book info {r.text}")
+            return ("", 0)
 
-
-    @retry(stop_max_attempt_number=3, wait_fixed=5000)
+    # 添加重试和刷新
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_bookmark_list(self, bookId):
+        """获取划线列表"""
+        # 请求前刷新session
         self.session.get(WEREAD_URL)
         params = dict(bookId=bookId)
         r = self.session.get(WEREAD_BOOKMARKLIST_URL, params=params)
         if r.ok:
             bookmarks = r.json().get("updated", [])
-            return bookmarks
+            # 添加排序逻辑
+            return sorted(
+                bookmarks,
+                key=lambda x: (x.get("chapterUid", 1), int(x.get("range", "0-0").split("-")[0])
+            )
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"Could not get {bookId} bookmark list")
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000)
-    def get_progress(self, bookId):
-        """获取阅读进度信息"""
-        self.session.get(WEREAD_URL)
-        params = dict(bookId=bookId)
-        r = self.session.get(WEREAD_PROGRESS_URL, params=params)
-        if r.ok:
-            return r.json()
-        else:
-            errcode = r.json().get("errcode",0)
-            self.handle_errcode(errcode)
-            print(f"Could not get book progress for {bookId}")
-
-    @retry(stop_max_attempt_number=3, wait_fixed=5000)
+    # 添加重试和刷新
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_read_info(self, bookId):
-        """获取阅读信息（已废弃，推荐使用get_progress）"""
+        """获取阅读信息"""
+        # 请求前刷新session
         self.session.get(WEREAD_URL)
-        params = dict(
-            noteCount=1,
-            readingDetail=1,
-            finishedBookIndex=1,
-            readingBookCount=1,
-            readingBookIndex=1,
-            finishedBookCount=1,
-            bookId=bookId,
-            finishedDate=1,
-        )
+        # 使用他修改后的参数
+        params = dict(bookId=bookId, readingDetail=1, readingBookIndex=1, finishedDate=1)
         r = self.session.get(WEREAD_READ_INFO_URL, params=params)
         if r.ok:
             return r.json()
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
-            print(f"Could not get read info for {bookId}")
+            raise Exception(f"get {bookId} read info failed {r.text}")
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000)
+    # 添加重试和刷新
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_review_list(self, bookId):
+        """获取笔记列表"""
+        # 请求前刷新session
         self.session.get(WEREAD_URL)
-        params = dict(bookId=bookId, listType=11, mine=1, synckey=0)
+        params = dict(bookId=bookId, listType=11, mine=1, syncKey=0)
         r = self.session.get(WEREAD_REVIEW_LIST_URL, params=params)
         if r.ok:
             reviews = r.json().get("reviews", [])
-            reviews = list(map(lambda x: x.get("review"), reviews))
-            reviews = [
-                {"chapterUid": 1000000, **x} if x.get("type") == 4 else x
-                for x in reviews
-            ]
-            return reviews
+            # 修改为返回(summary, reviews)格式
+            summary = [x for x in reviews if x.get("review", {}).get("type") == 4]
+            reviews = [x for x in reviews if x.get("review", {}).get("type") == 1]
+            reviews = [x.get("review") for x in reviews]
+            reviews = [{**x, "markText": x.pop("content")} for x in reviews]
+            return summary, reviews
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"get {bookId} review list failed {r.text}")
 
-    
+    # 添加重试和刷新
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_api_data(self):
+        """获取API数据"""
+        # 请求前刷新session
         self.session.get(WEREAD_URL)
         r = self.session.get(WEREAD_HISTORY_URL)
         if r.ok:
             return r.json()
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"get history data failed {r.text}")
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000)
+    # 添加重试和刷新
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_chapter_info(self, bookId):
+        """获取章节信息"""
+        # 请求前刷新session
         self.session.get(WEREAD_URL)
-        # 修改为POST请求，使用新的请求体格式
-        body = {"bookIds": [bookId]}
+        body = {"bookIds": [bookId], "synckeys": [0], "teenmode": 0}
         r = self.session.post(WEREAD_CHAPTER_INFO, json=body)
-        if r.ok:
-            data = r.json()
-            if "data" in data and len(data["data"]) > 0:
-                chapters = data["data"][0].get("updated", [])
-                # 添加点评章节
-                chapters.append(
-                    {
-                        "chapterUid": 1000000,
-                        "chapterIdx": 1000000,
-                        "updateTime": 1683825006,
-                        "readAhead": 0,
-                        "title": "点评",
-                        "level": 1,
-                    }
-                )
-                return {item["chapterUid"]: item for item in chapters}
+        if r.ok and "data" in r.json() and len(r.json()["data"]) == 1:
+            update = r.json()["data"][0].get("updated", [])
+            return {item["chapterUid"]: item for item in update}
         else:
-            errcode = r.json().get("errcode",0)
-            self.handle_errcode(errcode)
             raise Exception(f"get {bookId} chapter info failed {r.text}")
 
     def transform_id(self, book_id):
