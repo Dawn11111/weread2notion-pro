@@ -94,9 +94,21 @@ class WeReadApi:
 
     @handle_api_response
     def get_notebooklist(self):
-        """获取笔记本列表"""
+        """获取笔记本列表（过滤无效数据，确保元素为字典）"""
         self.session.get(WEREAD_URL)
-        return self.session.get(WEREAD_NOTEBOOKS_URL)
+        response = self.session.get(WEREAD_NOTEBOOKS_URL)
+        # 解析响应并过滤无效数据
+        try:
+            data = response.json()
+            books = data.get("books", [])
+            # 仅保留字典类型的元素，过滤字符串或其他无效类型
+            valid_books = [book for book in books if isinstance(book, dict)]
+            # 按排序字段排序
+            valid_books.sort(key=lambda x: x.get("sort", 0))
+            return valid_books
+        except Exception as e:
+            print(f"解析笔记本列表失败: {e}")
+            return []
 
     @handle_api_response
     def get_bookinfo(self, bookId):
