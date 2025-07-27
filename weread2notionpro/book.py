@@ -39,6 +39,8 @@ def insert_book_to_notion(books, index, bookId):
     bookInfo = weread_api.get_bookinfo(bookId)
     if bookInfo != None:
         book.update(bookInfo)
+    else:
+        print(f"警告：无法获取书籍 {bookId} 的信息")
     
     # 获取阅读信息
     readInfo = weread_api.get_read_info(bookId)
@@ -78,18 +80,23 @@ def insert_book_to_notion(books, index, bookId):
         )
         book["开始阅读时间"] = book.get("beginReadingDate")
         book["最后阅读时间"] = book.get("lastReadingDate")
+    else:
+        print(f"警告：无法获取书籍 {bookId} 的阅读信息")
     
     # 处理封面图片
     cover_data = book.get("cover")
     cover = get_cover_url(cover_data)
     
+    # 获取书名，确保不为空
+    title = book.get("title", f"未知书籍-{bookId}")
+    
     # 如果是新书，添加基本信息
     if bookId not in notion_books:
-        book["书名"] = book.get("title")
-        book["BookId"] = book.get("bookId")
-        book["ISBN"] = book.get("isbn")
+        book["书名"] = title
+        book["BookId"] = book.get("bookId", bookId)
+        book["ISBN"] = book.get("isbn", "")
         book["链接"] = weread_api.get_url(bookId)
-        book["简介"] = book.get("intro")
+        book["简介"] = book.get("intro", "")
         
         # 处理作者信息
         author = book.get("author", "")
@@ -121,7 +128,7 @@ def insert_book_to_notion(books, index, bookId):
         )
 
     print(
-        f"正在插入《{book.get('title')}》,一共{len(books)}本，当前是第{index+1}本。"
+        f"正在插入《{title}》,一共{len(books)}本，当前是第{index+1}本。"
     )
     
     # 插入或更新Notion页面
@@ -148,6 +155,8 @@ def insert_book_to_notion(books, index, bookId):
             data = book.get("readDetail").get("data")
             data = {item.get("readDate"): item.get("readTime") for item in data}
             insert_read_data(page_id, data)
+    else:
+        print(f"警告：插入书籍 {title} 到Notion失败")
 
 
 def insert_read_data(page_id, readTimes):
@@ -207,13 +216,18 @@ def main():
     global archive_dict
     
     # 获取书架数据
+    print("正在获取微信读书书架数据...")
     bookshelf_books = weread_api.get_bookshelf()
     if not bookshelf_books:
         print("无法获取书架数据，请检查网络连接或Cookie是否有效")
         return
     
+    print(f"获取到书架数据，包含 {len(bookshelf_books.get('books', []))} 本书籍")
+    
     # 获取Notion中已有的书籍
+    print("正在获取Notion中已有的书籍...")
     notion_books = notion_helper.get_all_book()
+    print(f"Notion中已有 {len(notion_books)} 本书籍")
     
     # 处理阅读进度
     bookProgress = bookshelf_books.get("bookProgress", [])
@@ -245,11 +259,13 @@ def main():
             not_need_sync.append(key)
     
     # 获取笔记本中的书籍
+    print("正在获取微信读书笔记本数据...")
     notebooks = weread_api.get_notebooklist()
     if notebooks:
         notebooks = [d["bookId"] for d in notebooks if "bookId" in d]
     else:
         notebooks = []
+    print(f"获取到 {len(notebooks)} 本笔记本书籍")
     
     # 获取书架中的书籍
     books = bookshelf_books.get("books", [])
@@ -257,13 +273,17 @@ def main():
         books = [d["bookId"] for d in books if "bookId" in d]
     else:
         books = []
+    print(f"书架中包含 {len(books)} 本书籍")
     
     # 确定需要同步的书籍列表
     books = list((set(notebooks) | set(books)) - set(not_need_sync))
+    print(f"需要同步 {len(books)} 本书籍")
     
     # 同步每本书籍
     for index, bookId in enumerate(books):
         insert_book_to_notion(books, index, bookId)
+    
+    print("书籍同步完成！")
 
 
 if __name__ == "__main__":
