@@ -158,9 +158,15 @@ notion_books = {}
 def main():
     global notion_books
     global archive_dict
-    bookshelf_books = weread_api.get_bookshelf()
+    
+    
     notion_books = notion_helper.get_all_book()
-    bookProgress = bookshelf_books.get("bookProgress")
+    bookshelf_books = weread_api.get_bookshelf()
+    # 如果bookshelf_books为None，则初始化为一个空字典
+    if bookshelf_books is None:
+        bookshelf_books = {}
+    # 确保bookProgress是一个列表，即使没有获取到数据
+    bookProgress = bookshelf_books.get("bookProgress", [])
     bookProgress = {book.get("bookId"): book for book in bookProgress}
     for archive in bookshelf_books.get("archive"):
         name = archive.get("name")
