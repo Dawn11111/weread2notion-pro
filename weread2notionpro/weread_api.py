@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import re
+import time
 
 import requests
 from requests.utils import cookiejar_from_dict
@@ -11,12 +12,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 WEREAD_URL = "https://weread.qq.com/"
-WEREAD_NOTEBOOKS_URL = "https://weread.qq.com/web/user/notebooks"
-WEREAD_BOOKMARKLIST_URL = "https://weread.qq.com/web/book/bookmarklist"
-WEREAD_CHAPTER_INFO = "https://weread.qq.com/web/book/chapterInfos"
-WEREAD_READ_INFO_URL = "https://weread.qq.com/web/book/readinfo"
-WEREAD_REVIEW_LIST_URL = "https://weread.qq.com/web/review/list"
-WEREAD_BOOK_INFO = "https://weread.qq.com/web/book/info"
+WEREAD_NOTEBOOKS_URL = "https://weread.qq.com/api/user/notebook"  # 更新API端点
+WEREAD_BOOKMARKLIST_URL = "https://weread.qq.com/web/book/bookmarklist"  # 更新API端点
+WEREAD_CHAPTER_INFO = "https://weread.qq.com/web/book/chapterInfos"  # 更新API端点
+WEREAD_READ_INFO_URL = "https://weread.qq.com/web/book/readinfo"  # 更新API端点
+WEREAD_REVIEW_LIST_URL = "https://weread.qq.com/web/review/list"  # 更新API端点
+WEREAD_BOOK_INFO = "https://weread.qq.com/web/book/info"  # 更新API端点
 WEREAD_READDATA_DETAIL = "https://weread.qq.com/web/readdata/detail"
 WEREAD_HISTORY_URL = "https://weread.qq.com/web/readdata/summary?synckey=0"
 
@@ -26,6 +27,10 @@ class WeReadApi:
         self.cookie = self.get_cookie()
         self.session = requests.Session()
         self.session.cookies = self.parse_cookie_string()
+        # 添加User-Agent以匹配新API要求
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        })
 
     def try_get_cloud_cookie(self, url, id, password):
         if url.endswith("/"):
@@ -72,8 +77,13 @@ class WeReadApi:
         
         return cookiejar
 
-    def get_bookshelf(self):
+    def refresh_token(self, exception):
+        """刷新token方法，用于retry机制"""
         self.session.get(WEREAD_URL)
+
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
+    def get_bookshelf(self):
+        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
         r = self.session.get(
             "https://weread.qq.com/web/shelf/sync?synckey=0&teenmode=0&album=1&onlyBookid=0"
         )
@@ -88,10 +98,10 @@ class WeReadApi:
         if( errcode== -2012 or errcode==-2010):
             print(f"::error::微信读书Cookie过期了，请参考文档重新设置。https://mp.weixin.qq.com/s/B_mqLUZv7M1rmXRsMlBf7A")
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000)
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_notebooklist(self):
         """获取笔记本列表"""
-        self.session.get(WEREAD_URL)
+        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
         r = self.session.get(WEREAD_NOTEBOOKS_URL)
         if r.ok:
             data = r.json()
@@ -103,10 +113,10 @@ class WeReadApi:
             self.handle_errcode(errcode)
             raise Exception(f"Could not get notebook list {r.text}")
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000)
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_bookinfo(self, bookId):
         """获取书的详情"""
-        self.session.get(WEREAD_URL)
+        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
         params = dict(bookId=bookId)
         r = self.session.get(WEREAD_BOOK_INFO, params=params)
         if r.ok:
@@ -116,15 +126,12 @@ class WeReadApi:
             self.handle_errcode(errcode)
             print(f"Could not get book info {r.text}")
 
-
-    @retry(stop_max_attempt_number=3, wait_fixed=5000)
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_bookmark_list(self, bookId):
-        self.session.get(WEREAD_URL)
+        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
         params = dict(bookId=bookId)
         r = self.session.get(WEREAD_BOOKMARKLIST_URL, params=params)
         if r.ok:
-            with open("bookmark.json","w") as f:
-                f.write(json.dumps(r.json(),indent=4,ensure_ascii=False))
             bookmarks = r.json().get("updated")
             return bookmarks
         else:
@@ -132,27 +139,11 @@ class WeReadApi:
             self.handle_errcode(errcode)
             raise Exception(f"Could not get {bookId} bookmark list")
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000)
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_read_info(self, bookId):
-        self.session.get(WEREAD_URL)
-        params = dict(
-            noteCount=1,
-            readingDetail=1,
-            finishedBookIndex=1,
-            readingBookCount=1,
-            readingBookIndex=1,
-            finishedBookCount=1,
-            bookId=bookId,
-            finishedDate=1,
-        )
-        headers = {
-            "baseapi":"32",
-            "appver":"8.2.5.10163885",
-            "basever":"8.2.5.10163885",
-            "osver":"12",
-            "User-Agent": "WeRead/8.2.5 WRBrand/xiaomi Dalvik/2.1.0 (Linux; U; Android 12; Redmi Note 7 Pro Build/SQ3A.220705.004)",
-        }
-        r = self.session.get(WEREAD_READ_INFO_URL,headers=headers, params=params)
+        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
+        params = dict(bookId=bookId, readingDetail=1, readingBookIndex=1, finishedDate=1)
+        r = self.session.get(WEREAD_READ_INFO_URL, params=params)
         if r.ok:
             return r.json()
         else:
@@ -160,29 +151,28 @@ class WeReadApi:
             self.handle_errcode(errcode)
             raise Exception(f"get {bookId} read info failed {r.text}")
 
-    @retry(stop_max_attempt_number=3, wait_fixed=5000)
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_review_list(self, bookId):
-        self.session.get(WEREAD_URL)
+        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
         params = dict(bookId=bookId, listType=11, mine=1, syncKey=0)
         r = self.session.get(WEREAD_REVIEW_LIST_URL, params=params)
         if r.ok:
             reviews = r.json().get("reviews")
+            # 处理点评和普通笔记
+            summary = list(filter(lambda x: x.get("review").get("type") == 4, reviews))
+            reviews = list(filter(lambda x: x.get("review").get("type") == 1, reviews))
             reviews = list(map(lambda x: x.get("review"), reviews))
-            reviews = [
-                {"chapterUid": 1000000, **x} if x.get("type") == 4 else x
-                for x in reviews
-            ]
-            return reviews
+            # 将content字段重命名为markText以保持一致性
+            reviews = list(map(lambda x: {**x, "markText": x.pop("content")}, reviews))
+            return summary, reviews
         else:
             errcode = r.json().get("errcode",0)
             self.handle_errcode(errcode)
             raise Exception(f"get {bookId} review list failed {r.text}")
 
-
-
-    
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_api_data(self):
-        self.session.get(WEREAD_URL)
+        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
         r = self.session.get(WEREAD_HISTORY_URL)
         if r.ok:
             return r.json()
@@ -191,11 +181,9 @@ class WeReadApi:
             self.handle_errcode(errcode)
             raise Exception(f"get history data failed {r.text}")
 
-    
-
-    @retry(stop_max_attempt_number=3, wait_fixed=5000)
+    @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_chapter_info(self, bookId):
-        self.session.get(WEREAD_URL)
+        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
         body = {"bookIds": [bookId], "synckeys": [0], "teenmode": 0}
         r = self.session.post(WEREAD_CHAPTER_INFO, json=body)
         if (
@@ -205,11 +193,12 @@ class WeReadApi:
             and "updated" in r.json()["data"][0]
         ):
             update = r.json()["data"][0]["updated"]
+            # 添加点评章节
             update.append(
                 {
                     "chapterUid": 1000000,
                     "chapterIdx": 1000000,
-                    "updateTime": 1683825006,
+                    "updateTime": int(time.time()),
                     "readAhead": 0,
                     "title": "点评",
                     "level": 1,
