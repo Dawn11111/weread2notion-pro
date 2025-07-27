@@ -2,7 +2,7 @@ import hashlib
 import json
 import os
 import re
-from typing import Dict, List, Optional, TypedDict
+from typing import Dict, List, Optional, TypedDict, Union
 
 import requests
 from requests.utils import cookiejar_from_dict
@@ -66,7 +66,7 @@ class BookInfo(TypedDict):
     bookId: str
     title: str
     author: str
-    cover: str
+    cover: Union[str, Dict]  # 封面可能是字符串或字典
     intro: str
     categories: List[str]
     totalWords: int
@@ -91,8 +91,8 @@ WEREAD_CHAPTER_INFO = "https://weread.qq.com/web/book/chapterInfos"
 WEREAD_READ_INFO_URL = "https://weread.qq.com/web/book/readinfo"
 WEREAD_PROGRESS_URL = "https://weread.qq.com/web/book/getProgress"
 WEREAD_REVIEW_LIST_URL = "https://weread.qq.com/web/review/list"
-WEREAD_BOOK_INFO = "https://weread.qq.com/web/book/info"
-WEREAD_HISTORY_URL = "https://weread.qq.com/web/readdata/summary?synckey=0"
+WEREAD_BOOK_INFO = "https://i.weread.qq.com/book/info"  # 使用原始API端点
+WEREAD_HISTORY_URL = "https://i.weread.qq.com/readdata/summary?synckey=0"
 
 
 class WeReadApi:
@@ -106,7 +106,7 @@ class WeReadApi:
             'Accept': 'application/json, text/plain, */*',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
             'Accept-Encoding': 'gzip, deflate, br',
-            'Content-Type': 'application/json'
+            'Referer': 'https://weread.qq.com/'
         })
 
     def try_get_cloud_cookie(self, url: str, id: str, password: str) -> Optional[str]:
@@ -159,11 +159,18 @@ class WeReadApi:
             cookies_dict[key] = value
         return cookiejar_from_dict(cookies_dict)
 
+    def refresh_cookie(self):
+        """刷新cookie"""
+        try:
+            self.session.get(WEREAD_URL)
+        except Exception as e:
+            print(f"刷新cookie失败: {e}")
+
     def get_bookshelf(self) -> dict:
         """获取书架数据"""
-        self.session.get(WEREAD_URL)
+        self.refresh_cookie()
         r = self.session.get(
-            "https://weread.qq.com/web/shelf/sync?synckey=0&teenmode=0&album=1&onlyBookid=0"
+            "https://i.weread.qq.com/shelf/sync?synckey=0&teenmode=0&album=1&onlyBookid=0"
         )
         if r.ok:
             return r.json()
@@ -182,7 +189,7 @@ class WeReadApi:
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_notebooklist(self) -> List[dict]:
         """获取笔记本列表"""
-        self.session.get(WEREAD_URL)
+        self.refresh_cookie()
         r = self.session.get(WEREAD_NOTEBOOKS_URL)
         if r.ok:
             data = r.json()
@@ -197,7 +204,7 @@ class WeReadApi:
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_bookinfo(self, bookId: str) -> Optional[BookInfo]:
         """获取书籍详情信息"""
-        self.session.get(WEREAD_URL)
+        self.refresh_cookie()
         params = {"bookId": bookId}
         r = self.session.get(WEREAD_BOOK_INFO, params=params)
         if r.ok:
@@ -211,7 +218,7 @@ class WeReadApi:
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_bookmark_list(self, bookId: str) -> List[Bookmark]:
         """获取书签列表"""
-        self.session.get(WEREAD_URL)
+        self.refresh_cookie()
         params = {"bookId": bookId}
         r = self.session.get(WEREAD_BOOKMARKLIST_URL, params=params)
         if r.ok:
@@ -224,7 +231,7 @@ class WeReadApi:
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_progress(self, bookId: str) -> Optional[BookProgressResponse]:
         """获取阅读进度信息"""
-        self.session.get(WEREAD_URL)
+        self.refresh_cookie()
         params = {"bookId": bookId}
         r = self.session.get(WEREAD_PROGRESS_URL, params=params)
         if r.ok:
@@ -237,14 +244,22 @@ class WeReadApi:
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_read_info(self, bookId: str) -> Optional[ReadInfo]:
-        """获取阅读信息(已废弃)"""
-        self.session.get(WEREAD_URL)
+        """获取阅读信息"""
+        self.refresh_cookie()
         params = {
             "bookId": bookId,
             "readingDetail": 1,
+            "readingBookIndex": 1,
             "finishedDate": 1
         }
-        r = self.session.get(WEREAD_READ_INFO_URL, params=params)
+        headers = {
+            "baseapi": "32",
+            "appver": "8.2.5.10163885",
+            "basever": "8.2.5.10163885",
+            "osver": "12",
+            "User-Agent": "WeRead/8.2.5 WRBrand/xiaomi Dalvik/2.1.0 (Linux; U; Android 12; Redmi Note 7 Pro Build/SQ3A.220705.004)",
+        }
+        r = self.session.get(WEREAD_READ_INFO_URL, headers=headers, params=params)
         if r.ok:
             return r.json()
         else:
@@ -256,7 +271,7 @@ class WeReadApi:
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_review_list(self, bookId: str) -> List[Review]:
         """获取书评列表"""
-        self.session.get(WEREAD_URL)
+        self.refresh_cookie()
         params = {"bookId": bookId, "listType": 11, "mine": 1, "synckey": 0}
         r = self.session.get(WEREAD_REVIEW_LIST_URL, params=params)
         if r.ok:
@@ -275,7 +290,7 @@ class WeReadApi:
 
     def get_api_data(self) -> dict:
         """获取历史阅读数据"""
-        self.session.get(WEREAD_URL)
+        self.refresh_cookie()
         r = self.session.get(WEREAD_HISTORY_URL)
         if r.ok:
             return r.json()
@@ -287,25 +302,28 @@ class WeReadApi:
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_chapter_info(self, bookId: str) -> Dict[int, ChapterInfo]:
         """获取章节信息"""
-        self.session.get(WEREAD_URL)
+        self.refresh_cookie()
         body = {"bookIds": [bookId]}
         r = self.session.post(WEREAD_CHAPTER_INFO, json=body)
         if r.ok:
             data = r.json()
-            chapters = data.get("data", [{}])[0].get("updated", [])
-            
-            # 添加点评章节
-            chapters.append({
-                "chapterUid": 1000000,
-                "chapterIdx": 1000000,
-                "title": "点评",
-                "level": 1,
-                "updateTime": 1683825006,
-                "readAhead": 0
-            })
-            
-            # 转换为字典格式 {chapterUid: chapterInfo}
-            return {item["chapterUid"]: item for item in chapters}
+            if "data" in data and len(data["data"]) > 0:
+                chapters = data["data"][0].get("updated", [])
+                
+                # 添加点评章节
+                chapters.append({
+                    "chapterUid": 1000000,
+                    "chapterIdx": 1000000,
+                    "title": "点评",
+                    "level": 1,
+                    "updateTime": int(time.time()),
+                    "readAhead": 0
+                })
+                
+                # 转换为字典格式 {chapterUid: chapterInfo}
+                return {item["chapterUid"]: item for item in chapters}
+            else:
+                raise Exception(f"章节信息数据格式错误: {data}")
         else:
             errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
