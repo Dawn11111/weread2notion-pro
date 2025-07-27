@@ -41,7 +41,7 @@ class WeReadApi:
         result = None
         try:
             response = requests.post(req_url, data=data, timeout=10)
-            if response.status_code == 200:  # 200状态码验证
+            if response.status_code == 200:
                 data = response.json()
                 cookie_data = data.get("cookie_data")
                 if cookie_data and "weread.qq.com" in cookie_data:
@@ -93,29 +93,18 @@ class WeReadApi:
                 timeout=10
             )
             
-            # 强化200状态码验证
             if r.status_code != 200:
                 raise Exception(f"获取书架失败，状态码: {r.status_code}，响应: {r.text[:200]}")
             
             data = r.json()
             
-            # 确保返回数据为字典类型
             if not isinstance(data, dict):
                 raise ValueError(f"书架数据格式错误，预期dict，实际: {type(data)}")
             
-            # 处理archive字段（核心修复点）
-            if "archive" not in data or data["archive"] is None:
-                data["archive"] = []  # 若为None则初始化为空列表
-            elif not isinstance(data["archive"], list):
-                data["archive"] = []  # 若不是列表则强制转为空列表
-                print("警告：archive字段不是列表类型，已自动修正为[]")
-            
-            # 处理bookProgress字段（保持之前的修复）
-            if "bookProgress" not in data or data["bookProgress"] is None:
-                data["bookProgress"] = []
-            elif not isinstance(data["bookProgress"], list):
-                data["bookProgress"] = []
-                print("警告：bookProgress字段不是列表类型，已自动修正为[]")
+            # 处理可能缺失或为None的字段
+            data["archive"] = data.get("archive") or []
+            data["bookProgress"] = data.get("bookProgress") or []
+            data["books"] = data.get("books") or []
                 
             return data
             
@@ -124,7 +113,6 @@ class WeReadApi:
         except json.JSONDecodeError:
             raise Exception(f"解析书架JSON失败，响应内容: {r.text[:200]}")
         except Exception as e:
-            # 捕获微信读书API特定错误码
             try:
                 err_data = r.json()
                 errcode = err_data.get("errcode", -1)
@@ -145,32 +133,33 @@ class WeReadApi:
     def get_notebooklist(self):
         self.session.get(WEREAD_URL)
         r = self.session.get(WEREAD_NOTEBOOKS_URL, timeout=10)
-        if r.status_code != 200:  # 200验证
-            raise Exception(f"获取笔记本列表失败，状态码: {r.status_code}")
-        if r.ok:
+        if r.status_code != 200:
+            print(f"获取笔记本列表失败，状态码: {r.status_code}，跳过处理")
+            return []  # 返回空列表而不是抛出异常
+        try:
             data = r.json()
             books = data.get("books", [])
+            if not isinstance(books, list):
+                print("警告：notebooklist返回的books不是列表，已修正为[]")
+                books = []
             books.sort(key=lambda x: x.get("sort", 0))
             return books
-        else:
-            errcode = r.json().get("errcode", 0)
-            self.handle_errcode(errcode)
-            raise Exception(f"获取笔记本列表失败 {r.text}")
+        except Exception as e:
+            print(f"获取笔记本列表异常: {str(e)}，跳过处理")
+            return []
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_bookinfo(self, bookId):
-        """获取书的详情"""
         self.session.get(WEREAD_URL)
         params = dict(bookId=bookId)
         r = self.session.get(WEREAD_BOOK_INFO, params=params, timeout=10)
-        if r.status_code != 200:  # 200验证
-            raise Exception(f"获取书籍信息失败，状态码: {r.status_code}")
-        if r.ok:
+        if r.status_code != 200:
+            print(f"获取书籍信息失败，状态码: {r.status_code}，跳过处理")
+            return None
+        try:
             return r.json()
-        else:
-            errcode = r.json().get("errcode", 0)
-            self.handle_errcode(errcode)
-            print(f"获取书籍信息失败 {r.text}")
+        except Exception as e:
+            print(f"获取书籍信息异常: {str(e)}，跳过处理")
             return None
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
@@ -178,90 +167,97 @@ class WeReadApi:
         self.session.get(WEREAD_URL)
         params = dict(bookId=bookId)
         r = self.session.get(WEREAD_BOOKMARKLIST_URL, params=params, timeout=10)
-        if r.status_code != 200:  # 200验证
-            raise Exception(f"获取书签列表失败，状态码: {r.status_code}")
-        if r.ok:
-            return r.json().get("updated", [])
-        else:
-            errcode = r.json().get("errcode", 0)
-            self.handle_errcode(errcode)
-            raise Exception(f"获取{bookId}书签列表失败")
+        if r.status_code != 200:
+            print(f"获取书签列表失败，状态码: {r.status_code}，跳过处理")
+            return []
+        try:
+            result = r.json().get("updated", [])
+            return result if isinstance(result, list) else []
+        except Exception as e:
+            print(f"获取书签列表异常: {str(e)}，跳过处理")
+            return []
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_read_info(self, bookId):
         self.session.get(WEREAD_URL)
         params = dict(bookId=bookId, readingDetail=1, readingBookIndex=1, finishedDate=1)
         r = self.session.get(WEREAD_READ_INFO_URL, params=params, timeout=10)
-        if r.status_code != 200:  # 200验证
-            raise Exception(f"获取阅读信息失败，状态码: {r.status_code}")
-        if r.ok:
+        if r.status_code != 200:
+            print(f"获取阅读信息失败，状态码: {r.status_code}，跳过处理")
+            return None
+        try:
             return r.json()
-        else:
-            errcode = r.json().get("errcode", 0)
-            self.handle_errcode(errcode)
-            raise Exception(f"获取{bookId}阅读信息失败 {r.text}")
+        except Exception as e:
+            print(f"获取阅读信息异常: {str(e)}，跳过处理")
+            return None
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_review_list(self, bookId):
         self.session.get(WEREAD_URL)
         params = dict(bookId=bookId, listType=11, mine=1, syncKey=0)
         r = self.session.get(WEREAD_REVIEW_LIST_URL, params=params, timeout=10)
-        if r.status_code != 200:  # 200验证
-            raise Exception(f"获取评论列表失败，状态码: {r.status_code}")
-        if r.ok:
+        if r.status_code != 200:
+            print(f"获取评论列表失败，状态码: {r.status_code}，跳过处理")
+            return [], []  # 返回空列表而不是抛出异常
+        try:
             reviews = r.json().get("reviews", [])
-            # 处理点评和普通笔记
+            reviews = reviews if isinstance(reviews, list) else []
+            
             summary = list(filter(lambda x: x.get("review", {}).get("type") == 4, reviews))
             reviews = list(filter(lambda x: x.get("review", {}).get("type") == 1, reviews))
             reviews = list(map(lambda x: x.get("review"), reviews))
-            # 将content字段重命名为markText以保持一致性
             reviews = list(map(lambda x: {**x, "markText": x.pop("content")} if x else x, reviews))
             return summary, reviews
-        else:
-            errcode = r.json().get("errcode", 0)
-            self.handle_errcode(errcode)
-            raise Exception(f"获取{bookId}评论列表失败 {r.text}")
+        except Exception as e:
+            print(f"获取评论列表异常: {str(e)}，跳过处理")
+            return [], []
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_api_data(self):
         self.session.get(WEREAD_URL)
         r = self.session.get(WEREAD_HISTORY_URL, timeout=10)
-        if r.status_code != 200:  # 200验证
-            raise Exception(f"获取历史数据失败，状态码: {r.status_code}")
-        if r.ok:
+        if r.status_code != 200:
+            print(f"获取历史数据失败，状态码: {r.status_code}，跳过处理")
+            return {}
+        try:
             return r.json()
-        else:
-            errcode = r.json().get("errcode", 0)
-            self.handle_errcode(errcode)
-            raise Exception(f"获取历史数据失败 {r.text}")
+        except Exception as e:
+            print(f"获取历史数据异常: {str(e)}，跳过处理")
+            return {}
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_chapter_info(self, bookId):
         self.session.get(WEREAD_URL)
         body = {"bookIds": [bookId], "synckeys": [0], "teenmode": 0}
         r = self.session.post(WEREAD_CHAPTER_INFO, json=body, timeout=10)
-        if r.status_code != 200:  # 200验证
-            raise Exception(f"获取章节信息失败，状态码: {r.status_code}")
-        if (
-            r.ok
-            and "data" in r.json()
-            and len(r.json()["data"]) == 1
-            and "updated" in r.json()["data"][0]
-        ):
-            update = r.json()["data"][0]["updated"]
-            update.append(
-                {
-                    "chapterUid": 1000000,
-                    "chapterIdx": 1000000,
-                    "updateTime": int(time.time()),
-                    "readAhead": 0,
-                    "title": "点评",
-                    "level": 1,
-                }
-            )
-            return {item["chapterUid"]: item for item in update}
-        else:
-            raise Exception(f"获取{bookId}章节信息失败 {r.text}")
+        if r.status_code != 200:
+            print(f"获取章节信息失败，状态码: {r.status_code}，跳过处理")
+            return {}
+        try:
+            if (
+                r.ok
+                and "data" in r.json()
+                and len(r.json()["data"]) == 1
+                and "updated" in r.json()["data"][0]
+            ):
+                update = r.json()["data"][0]["updated"]
+                update.append(
+                    {
+                        "chapterUid": 1000000,
+                        "chapterIdx": 1000000,
+                        "updateTime": int(time.time()),
+                        "readAhead": 0,
+                        "title": "点评",
+                        "level": 1,
+                    }
+                )
+                return {item["chapterUid"]: item for item in update}
+            else:
+                print(f"获取{bookId}章节信息格式异常，跳过处理")
+                return {}
+        except Exception as e:
+            print(f"获取章节信息异常: {str(e)}，跳过处理")
+            return {}
 
     def transform_id(self, book_id):
         id_length = len(book_id)
