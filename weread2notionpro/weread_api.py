@@ -12,12 +12,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 WEREAD_URL = "https://weread.qq.com/"
-WEREAD_NOTEBOOKS_URL = "https://weread.qq.com/api/user/notebook"  # 更新API端点
-WEREAD_BOOKMARKLIST_URL = "https://weread.qq.com/web/book/bookmarklist"  # 更新API端点
-WEREAD_CHAPTER_INFO = "https://weread.qq.com/web/book/chapterInfos"  # 更新API端点
-WEREAD_READ_INFO_URL = "https://weread.qq.com/web/book/readinfo"  # 更新API端点
-WEREAD_REVIEW_LIST_URL = "https://weread.qq.com/web/review/list"  # 更新API端点
-WEREAD_BOOK_INFO = "https://weread.qq.com/web/book/info"  # 更新API端点
+WEREAD_NOTEBOOKS_URL = "https://weread.qq.com/api/user/notebook"
+WEREAD_BOOKMARKLIST_URL = "https://weread.qq.com/web/book/bookmarklist"
+WEREAD_CHAPTER_INFO = "https://weread.qq.com/web/book/chapterInfos"
+WEREAD_READ_INFO_URL = "https://weread.qq.com/web/book/readinfo"
+WEREAD_REVIEW_LIST_URL = "https://weread.qq.com/web/review/list"
+WEREAD_BOOK_INFO = "https://weread.qq.com/web/book/info"
 WEREAD_READDATA_DETAIL = "https://weread.qq.com/web/readdata/detail"
 WEREAD_HISTORY_URL = "https://weread.qq.com/web/readdata/summary?synckey=0"
 
@@ -27,9 +27,10 @@ class WeReadApi:
         self.cookie = self.get_cookie()
         self.session = requests.Session()
         self.session.cookies = self.parse_cookie_string()
-        # 添加User-Agent以匹配新API要求
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Referer": "https://weread.qq.com/"
         })
 
     def try_get_cloud_cookie(self, url, id, password):
@@ -38,154 +39,188 @@ class WeReadApi:
         req_url = f"{url}/get/{id}"
         data = {"password": password}
         result = None
-        response = requests.post(req_url, data=data)
-        if response.status_code == 200:
-            data = response.json()
-            cookie_data = data.get("cookie_data")
-            if cookie_data and "weread.qq.com" in cookie_data:
-                cookies = cookie_data["weread.qq.com"]
-                cookie_str = "; ".join(
-                    [f"{cookie['name']}={cookie['value']}" for cookie in cookies]
-                )
-                result = cookie_str
+        try:
+            response = requests.post(req_url, data=data, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                cookie_data = data.get("cookie_data")
+                if cookie_data and "weread.qq.com" in cookie_data:
+                    cookies = cookie_data["weread.qq.com"]
+                    cookie_str = "; ".join(
+                        [f"{cookie['name']}={cookie['value']}" for cookie in cookies]
+                    )
+                    result = cookie_str
+        except Exception as e:
+            print(f"获取云端Cookie失败: {str(e)}")
         return result
 
     def get_cookie(self):
-        url = os.getenv("CC_URL")
-        if not url:
-            url = "https://cookiecloud.malinkang.com/"
+        url = os.getenv("CC_URL", "https://cookiecloud.malinkang.com/")
         id = os.getenv("CC_ID")
         password = os.getenv("CC_PASSWORD")
         cookie = os.getenv("WEREAD_COOKIE")
+        
         if url and id and password:
             cookie = self.try_get_cloud_cookie(url, id, password)
+        
         if not cookie or not cookie.strip():
-            raise Exception("没有找到cookie，请按照文档填写cookie")
+            raise Exception("没有找到有效的cookie，请按照文档填写cookie")
         return cookie
 
     def parse_cookie_string(self):
         cookies_dict = {}
-        
         # 使用正则表达式解析 cookie 字符串
         pattern = re.compile(r'([^=]+)=([^;]+);?\s*')
         matches = pattern.findall(self.cookie)
         
         for key, value in matches:
-            cookies_dict[key] = value.encode('unicode_escape').decode('ascii')
-        # 直接使用 cookies_dict 创建 cookiejar
-        cookiejar = cookiejar_from_dict(cookies_dict)
+            # 移除不必要的编码转换，避免cookie失效
+            cookies_dict[key] = value
         
-        return cookiejar
+        return cookiejar_from_dict(cookies_dict)
 
     def refresh_token(self, exception):
-        """刷新token方法，用于retry机制"""
+        """刷新token方法，用于retry机制，返回True表示需要重试"""
+        print(f"尝试刷新Token，原因: {str(exception)}")
         self.session.get(WEREAD_URL)
+        return True  # 表示需要重试
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_bookshelf(self):
-        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
-        r = self.session.get(
-            "https://weread.qq.com/web/shelf/sync?synckey=0&teenmode=0&album=1&onlyBookid=0"
-        )
-        if r.ok:
-            return r.json()
-        else:
-            errcode = r.json().get("errcode",0)
+        try:
+            self.session.get(WEREAD_URL)  # 刷新会话
+            r = self.session.get(
+                "https://weread.qq.com/web/shelf/sync?synckey=0&teenmode=0&album=1&onlyBookid=0",
+                timeout=10
+            )
+            r.raise_for_status()  # 触发HTTP错误状态码的异常
+            
+            data = r.json()
+            
+            # 验证返回数据结构
+            if not isinstance(data, dict):
+                raise ValueError("书架数据不是预期的字典类型")
+            
+            # 确保bookProgress存在且为列表
+            if "bookProgress" not in data:
+                data["bookProgress"] = []
+            elif not isinstance(data["bookProgress"], list):
+                data["bookProgress"] = []
+                print("bookProgress不是列表类型，已自动修正")
+                
+            return data
+            
+        except requests.exceptions.HTTPError as e:
+            print(f"HTTP请求错误: {str(e)}")
+            errcode = -1
+            try:
+                err_data = r.json()
+                errcode = err_data.get("errcode", -1)
+            except:
+                pass
             self.handle_errcode(errcode)
-            raise Exception(f"Could not get bookshelf {r.text}")
+            raise Exception(f"获取书架失败: {str(e)}")
+        except json.JSONDecodeError:
+            raise Exception(f"解析书架数据失败，响应内容: {r.text[:200]}")
+        except Exception as e:
+            raise Exception(f"获取书架时发生错误: {str(e)}")
         
-    def handle_errcode(self,errcode):
-        if( errcode== -2012 or errcode==-2010):
-            print(f"::error::微信读书Cookie过期了，请参考文档重新设置。https://mp.weixin.qq.com/s/B_mqLUZv7M1rmXRsMlBf7A")
+    def handle_errcode(self, errcode):
+        error_messages = {
+            -2012: "微信读书Cookie过期了，请参考文档重新设置",
+            -2010: "微信读书Cookie无效，请检查Cookie是否正确"
+        }
+        if errcode in error_messages:
+            print(f"::error::{error_messages[errcode]}。https://mp.weixin.qq.com/s/B_mqLUZv7M1rmXRsMlBf7A")
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_notebooklist(self):
         """获取笔记本列表"""
-        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
-        r = self.session.get(WEREAD_NOTEBOOKS_URL)
+        self.session.get(WEREAD_URL)
+        r = self.session.get(WEREAD_NOTEBOOKS_URL, timeout=10)
         if r.ok:
             data = r.json()
-            books = data.get("books")
-            books.sort(key=lambda x: x["sort"])
+            books = data.get("books", [])
+            books.sort(key=lambda x: x.get("sort", 0))
             return books
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
-            raise Exception(f"Could not get notebook list {r.text}")
+            raise Exception(f"获取笔记本列表失败 {r.text}")
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_bookinfo(self, bookId):
         """获取书的详情"""
-        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
+        self.session.get(WEREAD_URL)
         params = dict(bookId=bookId)
-        r = self.session.get(WEREAD_BOOK_INFO, params=params)
+        r = self.session.get(WEREAD_BOOK_INFO, params=params, timeout=10)
         if r.ok:
             return r.json()
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
-            print(f"Could not get book info {r.text}")
+            print(f"获取书籍信息失败 {r.text}")
+            return None
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_bookmark_list(self, bookId):
-        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
+        self.session.get(WEREAD_URL)
         params = dict(bookId=bookId)
-        r = self.session.get(WEREAD_BOOKMARKLIST_URL, params=params)
+        r = self.session.get(WEREAD_BOOKMARKLIST_URL, params=params, timeout=10)
         if r.ok:
-            bookmarks = r.json().get("updated")
-            return bookmarks
+            return r.json().get("updated", [])
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
-            raise Exception(f"Could not get {bookId} bookmark list")
+            raise Exception(f"获取{bookId}书签列表失败")
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_read_info(self, bookId):
-        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
+        self.session.get(WEREAD_URL)
         params = dict(bookId=bookId, readingDetail=1, readingBookIndex=1, finishedDate=1)
-        r = self.session.get(WEREAD_READ_INFO_URL, params=params)
+        r = self.session.get(WEREAD_READ_INFO_URL, params=params, timeout=10)
         if r.ok:
             return r.json()
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
-            raise Exception(f"get {bookId} read info failed {r.text}")
+            raise Exception(f"获取{bookId}阅读信息失败 {r.text}")
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_review_list(self, bookId):
-        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
+        self.session.get(WEREAD_URL)
         params = dict(bookId=bookId, listType=11, mine=1, syncKey=0)
-        r = self.session.get(WEREAD_REVIEW_LIST_URL, params=params)
+        r = self.session.get(WEREAD_REVIEW_LIST_URL, params=params, timeout=10)
         if r.ok:
-            reviews = r.json().get("reviews")
+            reviews = r.json().get("reviews", [])
             # 处理点评和普通笔记
-            summary = list(filter(lambda x: x.get("review").get("type") == 4, reviews))
-            reviews = list(filter(lambda x: x.get("review").get("type") == 1, reviews))
+            summary = list(filter(lambda x: x.get("review", {}).get("type") == 4, reviews))
+            reviews = list(filter(lambda x: x.get("review", {}).get("type") == 1, reviews))
             reviews = list(map(lambda x: x.get("review"), reviews))
             # 将content字段重命名为markText以保持一致性
-            reviews = list(map(lambda x: {**x, "markText": x.pop("content")}, reviews))
+            reviews = list(map(lambda x: {**x, "markText": x.pop("content")} if x else x, reviews))
             return summary, reviews
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
-            raise Exception(f"get {bookId} review list failed {r.text}")
+            raise Exception(f"获取{bookId}评论列表失败 {r.text}")
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_api_data(self):
-        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
-        r = self.session.get(WEREAD_HISTORY_URL)
+        self.session.get(WEREAD_URL)
+        r = self.session.get(WEREAD_HISTORY_URL, timeout=10)
         if r.ok:
             return r.json()
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
-            raise Exception(f"get history data failed {r.text}")
+            raise Exception(f"获取历史数据失败 {r.text}")
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=refresh_token)
     def get_chapter_info(self, bookId):
-        self.session.get(WEREAD_URL)  # 每次请求前刷新cookie
+        self.session.get(WEREAD_URL)
         body = {"bookIds": [bookId], "synckeys": [0], "teenmode": 0}
-        r = self.session.post(WEREAD_CHAPTER_INFO, json=body)
+        r = self.session.post(WEREAD_CHAPTER_INFO, json=body, timeout=10)
         if (
             r.ok
             and "data" in r.json()
@@ -206,7 +241,7 @@ class WeReadApi:
             )
             return {item["chapterUid"]: item for item in update}
         else:
-            raise Exception(f"get {bookId} chapter info failed {r.text}")
+            raise Exception(f"获取{bookId}章节信息失败 {r.text}")
 
     def transform_id(self, book_id):
         id_length = len(book_id)
