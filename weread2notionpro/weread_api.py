@@ -23,7 +23,9 @@ WEREAD_HISTORY_URL = "https://weread.qq.com/web/readdata/summary?synckey=0"
 
 class WeReadApi:
     def __init__(self):
+        print("正在获取cookie...")
         self.cookie = self.get_cookie()
+        print("成功获取cookie")
         self.session = requests.Session()
         self.session.cookies = self.parse_cookie_string()
 
@@ -33,6 +35,7 @@ class WeReadApi:
         req_url = f"{url}/get/{id}"
         data = {"password": password}
         result = None
+        print(f"尝试从云服务 {req_url} 获取cookie...")
         response = requests.post(req_url, data=data)
         if response.status_code == 200:
             data = response.json()
@@ -43,6 +46,7 @@ class WeReadApi:
                     [f"{cookie['name']}={cookie['value']}" for cookie in cookies]
                 )
                 result = cookie_str
+                print("成功从云服务获取cookie")
         return result
 
     def get_cookie(self):
@@ -59,82 +63,100 @@ class WeReadApi:
         return cookie
 
     def parse_cookie_string(self):
+        print("正在解析cookie字符串...")
         cookies_dict = {}
-        
+
         # 使用正则表达式解析 cookie 字符串
         pattern = re.compile(r'([^=]+)=([^;]+);?\s*')
         matches = pattern.findall(self.cookie)
-        
+
         for key, value in matches:
             cookies_dict[key] = value.encode('unicode_escape').decode('ascii')
         # 直接使用 cookies_dict 创建 cookiejar
         cookiejar = cookiejar_from_dict(cookies_dict)
-        
+        print("成功解析cookie字符串")
         return cookiejar
 
     def get_bookshelf(self):
+        print("正在访问微信读书首页...")
         self.session.get(WEREAD_URL)
+        print("正在获取书架信息...")
         r = self.session.get(
             "https://weread.qq.com/web/shelf/sync?synckey=0&teenmode=0&album=1&onlyBookid=0"
         )
         if r.ok:
+            print("成功获取书架信息")
+            print(f"请求 get_bookshelf 内容: {json.dumps(r.json(), indent=4, ensure_ascii=False)}")
             return r.json()
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"Could not get bookshelf {r.text}")
-        
-    def handle_errcode(self,errcode):
-        if( errcode== -2012 or errcode==-2010):
+
+    def handle_errcode(self, errcode):
+        if errcode == -2012 or errcode == -2010:
             print(f"::error::微信读书Cookie过期了，请参考文档重新设置。https://mp.weixin.qq.com/s/B_mqLUZv7M1rmXRsMlBf7A")
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_notebooklist(self):
         """获取笔记本列表"""
+        print("正在访问微信读书首页...")
         self.session.get(WEREAD_URL)
+        print("正在获取笔记本列表...")
         r = self.session.get(WEREAD_NOTEBOOKS_URL)
         if r.ok:
             data = r.json()
             books = data.get("books")
             books.sort(key=lambda x: x["sort"])
+            print("成功获取笔记本列表")
+            print(f"请求 get_notebooklist 内容: {json.dumps(data, indent=4, ensure_ascii=False)}")
             return books
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"Could not get notebook list {r.text}")
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_bookinfo(self, bookId):
         """获取书的详情"""
+        print("正在访问微信读书首页...")
         self.session.get(WEREAD_URL)
+        print(f"正在获取书籍 {bookId} 的详情...")
         params = dict(bookId=bookId)
         r = self.session.get(WEREAD_BOOK_INFO, params=params)
         if r.ok:
+            print(f"成功获取书籍 {bookId} 的详情")
+            print(f"请求 get_bookinfo 内容: {json.dumps(r.json(), indent=4, ensure_ascii=False)}")
             return r.json()
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             print(f"Could not get book info {r.text}")
 
-
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_bookmark_list(self, bookId):
+        print("正在访问微信读书首页...")
         self.session.get(WEREAD_URL)
+        print(f"正在获取书籍 {bookId} 的划线列表...")
         params = dict(bookId=bookId)
         r = self.session.get(WEREAD_BOOKMARKLIST_URL, params=params)
         if r.ok:
-            with open("bookmark.json","w") as f:
-                f.write(json.dumps(r.json(),indent=4,ensure_ascii=False))
+            with open("bookmark.json", "w") as f:
+                f.write(json.dumps(r.json(), indent=4, ensure_ascii=False))
             bookmarks = r.json().get("updated")
+            print(f"成功获取书籍 {bookId} 的划线列表")
+            print(f"请求 get_bookmark_list 内容: {json.dumps(r.json(), indent=4, ensure_ascii=False)}")
             return bookmarks
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"Could not get {bookId} bookmark list")
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_read_info(self, bookId):
+        print("正在访问微信读书首页...")
         self.session.get(WEREAD_URL)
+        print(f"正在获取书籍 {bookId} 的阅读信息...")
         params = dict(
             noteCount=1,
             readingDetail=1,
@@ -146,23 +168,27 @@ class WeReadApi:
             finishedDate=1,
         )
         headers = {
-            "baseapi":"32",
-            "appver":"8.2.5.10163885",
-            "basever":"8.2.5.10163885",
-            "osver":"12",
+            "baseapi": "32",
+            "appver": "8.2.5.10163885",
+            "basever": "8.2.5.10163885",
+            "osver": "12",
             "User-Agent": "WeRead/8.2.5 WRBrand/xiaomi Dalvik/2.1.0 (Linux; U; Android 12; Redmi Note 7 Pro Build/SQ3A.220705.004)",
         }
-        r = self.session.get(WEREAD_READ_INFO_URL,headers=headers, params=params)
+        r = self.session.get(WEREAD_READ_INFO_URL, headers=headers, params=params)
         if r.ok:
+            print(f"成功获取书籍 {bookId} 的阅读信息")
+            print(f"请求 get_read_info 内容: {json.dumps(r.json(), indent=4, ensure_ascii=False)}")
             return r.json()
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"get {bookId} read info failed {r.text}")
 
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_review_list(self, bookId):
+        print("正在访问微信读书首页...")
         self.session.get(WEREAD_URL)
+        print(f"正在获取书籍 {bookId} 的笔记列表...")
         params = dict(bookId=bookId, listType=11, mine=1, syncKey=0)
         r = self.session.get(WEREAD_REVIEW_LIST_URL, params=params)
         if r.ok:
@@ -172,30 +198,33 @@ class WeReadApi:
                 {"chapterUid": 1000000, **x} if x.get("type") == 4 else x
                 for x in reviews
             ]
+            print(f"成功获取书籍 {bookId} 的笔记列表")
+            print(f"请求 get_review_list 内容: {json.dumps(r.json(), indent=4, ensure_ascii=False)}")
             return reviews
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"get {bookId} review list failed {r.text}")
 
-
-
-    
     def get_api_data(self):
+        print("正在访问微信读书首页...")
         self.session.get(WEREAD_URL)
+        print("正在获取历史数据...")
         r = self.session.get(WEREAD_HISTORY_URL)
         if r.ok:
+            print("成功获取历史数据")
+            print(f"请求 get_api_data 内容: {json.dumps(r.json(), indent=4, ensure_ascii=False)}")
             return r.json()
         else:
-            errcode = r.json().get("errcode",0)
+            errcode = r.json().get("errcode", 0)
             self.handle_errcode(errcode)
             raise Exception(f"get history data failed {r.text}")
 
-    
-
     @retry(stop_max_attempt_number=3, wait_fixed=5000)
     def get_chapter_info(self, bookId):
+        print("正在访问微信读书首页...")
         self.session.get(WEREAD_URL)
+        print(f"正在获取书籍 {bookId} 的章节信息...")
         body = {"bookIds": [bookId], "synckeys": [0], "teenmode": 0}
         r = self.session.post(WEREAD_CHAPTER_INFO, json=body)
         if (
@@ -215,6 +244,8 @@ class WeReadApi:
                     "level": 1,
                 }
             )
+            print(f"成功获取书籍 {bookId} 的章节信息")
+            print(f"请求 get_chapter_info 内容: {json.dumps(r.json(), indent=4, ensure_ascii=False)}")
             return {item["chapterUid"]: item for item in update}
         else:
             raise Exception(f"get {bookId} chapter info failed {r.text}")
@@ -224,7 +255,7 @@ class WeReadApi:
         if re.match("^\\d*$", book_id):
             ary = []
             for i in range(0, id_length, 9):
-                ary.append(format(int(book_id[i : min(i + 9, id_length)]), "x"))
+                ary.append(format(int(book_id[i: min(i + 9, id_length)]), "x"))
             return "3", ary
 
         result = ""
@@ -251,7 +282,7 @@ class WeReadApi:
                 result += "g"
 
         if len(result) < 20:
-            result += digest[0 : 20 - len(result)]
+            result += digest[0: 20 - len(result)]
 
         md5 = hashlib.md5()
         md5.update(result.encode("utf-8"))
