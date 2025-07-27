@@ -9,8 +9,6 @@ USER_ICON_URL = "https://www.notion.so/icons/user-circle-filled_gray.svg"
 BOOK_ICON_URL = "https://www.notion.so/icons/book_gray.svg"
 rating = {"poor": "⭐️", "fair": "⭐️⭐️⭐️", "good": "⭐️⭐️⭐️⭐️⭐️"}
 
-
-
 def insert_book_to_notion(books, index, bookId):
     """插入Book到Notion"""
     book = {}
@@ -23,48 +21,55 @@ def insert_book_to_notion(books, index, bookId):
         book.update(bookInfo)
     readInfo = weread_api.get_read_info(bookId)
     # 研究了下这个状态不知道什么情况有的虽然读了状态还是1 markedStatus = 1 想读 4 读完 其他为在读
-    readInfo.update(readInfo.get("readDetail", {}))
-    readInfo.update(readInfo.get("bookInfo", {}))
-    book.update(readInfo)
-    book["阅读进度"] = (
-        100 if (book.get("markedStatus") == 4) else book.get("readingProgress", 0)
-    ) / 100
-    markedStatus = book.get("markedStatus")
-    status = "想读"
-    if markedStatus == 4:
-        status = "已读"
-    elif book.get("readingTime", 0) >= 60:
-        status = "在读"
-    book["阅读状态"] = status
-    book["阅读时长"] = book.get("readingTime")
-    book["阅读天数"] = book.get("totalReadDay")
-    book["评分"] = book.get("newRating")
-    if book.get("newRatingDetail") and book.get("newRatingDetail").get("myRating"):
-        book["我的评分"] = rating.get(book.get("newRatingDetail").get("myRating"))
-    elif status == "已读":
-        book["我的评分"] = "未评分"
-    book["时间"] = (
-        book.get("finishedDate")
-        or book.get("lastReadingDate")
-        or book.get("readingBookDate")
-    )
-    book["开始阅读时间"] = book.get("beginReadingDate")
-    book["最后阅读时间"] = book.get("lastReadingDate")
-    cover = book.get("cover").replace("/s_", "/t7_")
+    if readInfo:
+        readInfo.update(readInfo.get("readDetail", {}))
+        readInfo.update(readInfo.get("bookInfo", {}))
+        book.update(readInfo)
+        book["阅读进度"] = (
+            100 if (book.get("markedStatus") == 4) else book.get("readingProgress", 0)
+        ) / 100
+        markedStatus = book.get("markedStatus")
+        status = "想读"
+        if markedStatus == 4:
+            status = "已读"
+        elif book.get("readingTime", 0) >= 60:
+            status = "在读"
+        book["阅读状态"] = status
+        book["阅读时长"] = book.get("readingTime")
+        book["阅读天数"] = book.get("totalReadDay")
+        book["评分"] = book.get("newRating")
+        if book.get("newRatingDetail") and book.get("newRatingDetail").get("myRating"):
+            book["我的评分"] = rating.get(book.get("newRatingDetail").get("myRating"))
+        elif status == "已读":
+            book["我的评分"] = "未评分"
+        book["时间"] = (
+            book.get("finishedDate")
+            or book.get("lastReadingDate")
+            or book.get("readingBookDate")
+        )
+        book["开始阅读时间"] = book.get("beginReadingDate")
+        book["最后阅读时间"] = book.get("lastReadingDate")
+    
+    cover = book.get("cover", "")
+    if cover:
+        cover = cover.replace("/s_", "/t7_")
     if not cover or not cover.strip() or not cover.startswith("http"):
         cover = BOOK_ICON_URL
+    
     if bookId not in notion_books:
         book["书名"] = book.get("title")
         book["BookId"] = book.get("bookId")
         book["ISBN"] = book.get("isbn")
         book["链接"] = weread_api.get_url(bookId)
         book["简介"] = book.get("intro")
-        book["作者"] = [
-            notion_helper.get_relation_id(
-                x, notion_helper.author_database_id, USER_ICON_URL
-            )
-            for x in book.get("author").split(" ")
-        ]
+        author = book.get("author", "")
+        if author:
+            book["作者"] = [
+                notion_helper.get_relation_id(
+                    x, notion_helper.author_database_id, USER_ICON_URL
+                )
+                for x in author.split(" ")
+            ]
         if book.get("categories"):
             book["分类"] = [
                 notion_helper.get_relation_id(
@@ -72,6 +77,7 @@ def insert_book_to_notion(books, index, bookId):
                 )
                 for x in book.get("categories")
             ]
+    
     properties = utils.get_properties(book, book_properties_type_dict)
     if book.get("时间"):
         notion_helper.get_date_relation(
@@ -96,11 +102,13 @@ def insert_book_to_notion(books, index, bookId):
             properties=properties,
             icon=utils.get_icon(cover),
         )
-    page_id = result.get("id")
-    if book.get("readDetail") and book.get("readDetail").get("data"):
-        data = book.get("readDetail").get("data")
-        data = {item.get("readDate"): item.get("readTime") for item in data}
-        insert_read_data(page_id, data)
+    
+    if result:
+        page_id = result.get("id")
+        if book.get("readDetail") and book.get("readDetail").get("data"):
+            data = book.get("readDetail").get("data")
+            data = {item.get("readDate"): item.get("readTime") for item in data}
+            insert_read_data(page_id, data)
 
 
 def insert_read_data(page_id, readTimes):
@@ -159,25 +167,31 @@ def main():
     global notion_books
     global archive_dict
     
+    bookshelf_books = weread_api.get_bookshelf()
+    if not bookshelf_books:
+        print("无法获取书架数据，请检查网络连接或Cookie是否有效")
+        return
     
     notion_books = notion_helper.get_all_book()
-    bookshelf_books = weread_api.get_bookshelf()
-    # 如果bookshelf_books为None，则初始化为一个空字典
-    if bookshelf_books is None:
-        bookshelf_books = {}
-    # 确保bookProgress是一个列表，即使没有获取到数据
+    
+    # 安全处理bookProgress
     bookProgress = bookshelf_books.get("bookProgress", [])
-    bookProgress = {book.get("bookId"): book for book in bookProgress}
-    for archive in bookshelf_books.get("archive"):
+    bookProgress_dict = {book.get("bookId"): book for book in bookProgress}
+    
+    # 安全处理archive
+    archive_list = bookshelf_books.get("archive", [])
+    for archive in archive_list:
         name = archive.get("name")
-        bookIds = archive.get("bookIds")
+        bookIds = archive.get("bookIds", [])
         archive_dict.update({bookId: name for bookId in bookIds})
+    
     not_need_sync = []
     for key, value in notion_books.items():
+        book_progress = bookProgress_dict.get(key, {})
         if (
             (
-                key not in bookProgress
-                or value.get("readingTime") == bookProgress.get(key).get("readingTime")
+                key not in bookProgress_dict
+                or value.get("readingTime") == book_progress.get("readingTime")
             )
             and (archive_dict.get(key) == value.get("category"))
             and (value.get("cover") is not None)
@@ -187,11 +201,20 @@ def main():
             )
         ):
             not_need_sync.append(key)
+    
     notebooks = weread_api.get_notebooklist()
-    notebooks = [d["bookId"] for d in notebooks if "bookId" in d]
-    books = bookshelf_books.get("books")
-    books = [d["bookId"] for d in books if "bookId" in d]
-    books = list((set(notebooks) | set(books)) - set(not_need_sync))
+    if notebooks:
+        notebooks = [d["bookId"] for d in notebooks if "bookId" in d]
+    else:
+        notebooks = []
+    
+    books = bookshelf_books.get("books", [])
+    if books:
+        books = [d["bookId"] for d in books if "bookId" in d]
+    else:
+        books = []
+    
+    books = list((set(notebooks) | set(books)) - set(not_need_sync)
     for index, bookId in enumerate(books):
         insert_book_to_notion(books, index, bookId)
 
