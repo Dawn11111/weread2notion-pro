@@ -214,7 +214,7 @@ def main():
     else:
         books = []
     
-    books = list((set(notebooks) | set(books)) - set(not_need_sync)
+    books = list((set(notebooks) | set(books)) - set(not_need_sync))
     for index, bookId in enumerate(books):
         insert_book_to_notion(books, index, bookId)
 
